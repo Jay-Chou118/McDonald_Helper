@@ -2,6 +2,12 @@
 
 按官方营养、个人口味、天气和星期，从真实菜单、套餐、随心配和账户可用优惠券中找一顿实付更划算的麦当劳。独立个人工具，非麦当劳官方产品。
 
+## 目标用户与使用示例
+
+适合经常单人点麦当劳、希望控制单餐支出并参考营养数据的用户，以及需要在本机通过 Skill 辅助搭餐的使用者。需要本人麦当劳 MCP token、Node.js 和浏览器；营养目标由用户自行设置，推荐不构成医疗或营养专业建议。
+
+例如：在「我的偏好」设定热量 500–800 kcal、蛋白质至少 25 g、钠不超过 1800 mg，再选择「20 元预算挑战」并点击「帮我搭一餐」。工具按当前门店菜单、套餐、随心配和本人可用券核价，显示达标搭配及预算余额；无解时展示超额或条件不匹配原因。这些数字仅为操作示例，实际结果随门店、时间、优惠券与个人条件变化。
+
 ## 启动
 
 需要 Node.js 20.19+ 或 22.12+。首次启动复制 `.env.example` 为 `.env.local`，其中只需要端口配置。每个浏览器会话在网页内连接自己的麦当劳账号。
@@ -125,6 +131,14 @@ node scripts/package-skill.mjs
 在 [扩展市场](https://skills.bytedance.net/contributors) 选择「创建 → 本地文件上传 → Skill」，选此 ZIP，并明确选择空间；上传窗口未选择空间时可能默认公共空间。平台的 [官方上传指南](https://bytedance.larkoffice.com/wiki/ToyIwp7mmibaiZkEKUocnYFAnQd) 规定子目录包含 `SKILL.md`，名称最多 64 字符，描述最多 1024 字符。指南示例为 `skills/doc-drafter/SKILL.md`，没有明确单独 ZIP 的扫描深度；本包选单个 Skill 目录以减少识别歧义。平台实际解析是否成功仍需要上传后确认。
 
 上传仅分发指令和代码，不自动部署网页、生成个人 token 或配置每用户 MCP。当前未验证平台在线试用环境的 Node.js、浏览器和私密凭证能力；本包不能据此宣称支持纯聊天云端运行。共享同一份 Skill 与共享 token 是不同的事。如果未来要在云端直接点餐，需另接每用户授权的 MCP 或隔离后端。
+
+## 参赛材料
+
+本项目参加[麦当劳程序员创意开发大赛](https://github.com/M-China/mcd-developer-innovation-challenge)，相关材料：
+
+- [CONTEST_DECLARATION.md](CONTEST_DECLARATION.md)：使用活动仓库提供的参赛声明原文。
+- [MCP_INTEGRATION.md](MCP_INTEGRATION.md)：实际使用的 Server、Tool、调用流程、业务价值与复现步骤。
+- [mcp-config.example.json](mcp-config.example.json)：供支持环境变量注入的 MCP 宿主参考的脱敏配置；当前网页仍由用户在本机连接本人 token。
 
 ## 验证
 
