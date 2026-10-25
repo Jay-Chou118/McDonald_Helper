@@ -1,0 +1,9 @@
+node_modules/
+dist/
+__pycache__/
+.env*
+!.env.example
+.local/
+.trae-html-share-packages/
+*.log
+.DS_Store

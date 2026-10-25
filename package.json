@@ -1,0 +1,27 @@
+{
+  "name": "mai-pick",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "node --env-file=.env.local --watch server/index.mjs",
+    "dev:web": "vite --host localhost",
+    "build": "vite build",
+    "start": "node --env-file=.env.local server/index.mjs",
+    "test": "node --test server/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.5.0",
+    "concurrently": "^9.1.2",
+    "vite": "^6.3.0"
+  }
+}
