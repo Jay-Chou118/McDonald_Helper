@@ -12,7 +12,7 @@ const nutrition = [
   { productName: '双层吉士汉堡', energyKcal: 450, protein: 30, fat: 20, carbohydrate: 40, sodium: 900, calcium: 100 },
   { productName: '纯牛奶', energyKcal: 100, protein: 8, fat: 4, carbohydrate: 10, sodium: 100, calcium: 100 },
 ];
-async function setup(t, { failClaim = false } = {}) {
+async function setup(t, { failClaim = false, failPrice = false, deliveryFee = 0, tablewareFee = 0 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'mai-economy-test-'));
   const calls = [], claimed = new Set();
   let paymentStatus = '1';
@@ -48,9 +48,11 @@ async function setup(t, { failClaim = false } = {}) {
           ] };
           return { name: args.code === 'main' ? '双层吉士汉堡' : '纯牛奶', rounds: [] };
         case 'calculate-price': {
+          if (failPrice) throw new ServiceError('餐品暂时不可售');
           const productList = args.items.map(item => ({ productCode: item.productCode, quantity: item.quantity,
             subtotal: (item.couponId ? 1190 : item.productCode === 'bundle' ? 1490 : item.productCode === 'milk' ? 800 : 2000) * item.quantity }));
-          const price = productList.reduce((s, p) => s + p.subtotal, 0);
+          const price = productList.reduce((s, p) => s + p.subtotal, 0)
+            + (args.orderType === 2 ? deliveryFee : 0) + (args.needTableware ? tablewareFee : 0);
           return { price, originalPrice: price + 600, discount: 100, productList, takeWayList: [{ code: 'out' }] };
         }
         case 'create-order': return { orderId: `fake-${token}` };
@@ -204,4 +206,69 @@ test('payment sync uses official status and paid amounts, does not count created
   h.pay('7'); await a.request('/history/sync', {});
   assert.equal((await a.request('/journal')).data.summary.spent, 0);
   assert.equal(h.calls.filter(c => c.name === 'auto-bind-coupons').length, 0);
+});
+
+test('challenge budgets are temporary, isolated, use exact cents and reuse candidate prices', async t => {
+  const h = await setup(t);
+  const a = await h.browser('fake_challenge_alpha'), b = await h.browser('fake_challenge_beta');
+  const before = (await a.request('/bootstrap')).data.preferences;
+  const challenge = async budget => a.request('/recommend', { context, challengeBudget: budget });
+  const first = await challenge(15);
+  assert.equal(first.status, 200);
+  assert.equal(first.data.challenge.status, 'matched');
+  assert.equal(first.data.plans[0].price, 14.9);
+  assert.equal(first.data.plans[0].savings.budgetRemaining, 10);
+  const count = h.calls.filter(c => c.name === 'calculate-price').length;
+  const second = await challenge(20);
+  assert.equal(second.data.plans[0].savings.budgetRemaining, 510);
+  assert.equal(h.calls.filter(c => c.name === 'calculate-price').length, count);
+  assert.equal((await challenge(14.9)).data.challenge.status, 'matched');
+  const low = (await challenge(14.89)).data;
+  assert.equal(low.plans.length, 0);
+  assert.equal(low.challenge.status, 'over_budget');
+  assert.equal(low.challenge.gap, 1);
+  assert.equal(low.challenge.lowestVerified, 1490);
+  assert.deepEqual((await a.request('/bootstrap')).data.preferences, before);
+  assert.equal((await b.request('/recommend', { context })).data.challenge, null);
+  for (const budget of [0, 501, 14.999, '15', null]) assert.equal((await challenge(budget)).status, 400);
+  assert.equal(h.calls.some(c => ['auto-bind-coupons', 'create-order'].includes(c.name)), false);
+});
+
+test('challenge includes delivery and tableware fees and rechecks edited baskets at checkout', async t => {
+  const h = await setup(t, { deliveryFee: 600, tablewareFee: 100 });
+  const a = await h.browser('fake_challenge_alpha');
+  const delivery = { storeCode: context.storeCode, orderType: 2, beType: 2, addressId: 'fake-address', beCode: 'fake-delivery' };
+  const result = (await a.request('/recommend', { context: delivery, challengeBudget: 20 })).data;
+  assert.equal(result.challenge.status, 'over_budget');
+  assert.equal(result.challenge.lowestVerified, 2090);
+  assert.equal(result.challenge.gap, 90);
+  const menu = (await a.request(`/menu?${new URLSearchParams(context)}`)).data.foods;
+  const bundle = menu.find(f => f.code === 'bundle');
+  const body = { context, selections: [{ id: bundle.id, quantity: 1 }], needTableware: false, challengeBudget: 15 };
+  const quote = await a.request('/quote', body);
+  assert.equal(quote.status, 200); assert.equal(quote.data.challengeBudget, 15);
+  assert.equal(quote.data.savings.budgetRemaining, 10);
+  assert.equal((await a.request('/quote', { ...body, needTableware: true })).status, 422);
+  assert.equal((await a.request('/quote', { ...body, selections: [{ id: bundle.id, quantity: 2 }] })).status, 422);
+  const prefs = (await a.request('/bootstrap')).data.preferences;
+  await a.request('/preferences', { ...prefs, excludes: '牛奶' }, 'PUT');
+  assert.equal((await a.request('/quote', body)).status, 422);
+  const noMatch = (await a.request('/recommend', { context, challengeBudget: 15 })).data;
+  assert.equal(noMatch.plans.length, 0);
+  assert.equal(noMatch.challenge.lowestVerified, 2000);
+  await a.request('/preferences', { ...prefs, proteinMin: 100 }, 'PUT');
+  const impossible = (await a.request('/recommend', { context, challengeBudget: 500 })).data;
+  assert.equal(impossible.challenge.status, 'no_match');
+  assert.equal(impossible.challenge.lowestVerified, null);
+  assert.equal((await a.request('/bootstrap')).data.preferences.proteinMin, 100);
+});
+
+test('failed prices produce an unknown challenge result rather than a false over-budget verdict', async t => {
+  const h = await setup(t, { failPrice: true });
+  const a = await h.browser('fake_challenge_alpha');
+  const result = (await a.request('/recommend', { context, challengeBudget: 15 })).data;
+  assert.equal(result.challenge.status, 'unverified');
+  assert.equal(result.challenge.lowestVerified, null);
+  assert.equal(result.challenge.gap, null);
+  assert.equal(result.stats.verified, 0);
 });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { OffersPage, JournalPage, PriceSavings } from './Economy.jsx';
+import { OffersPage, JournalPage, PriceSavings, BudgetChallenge } from './Economy.jsx';
 import {
   ArrowUpRight, ArrowRight, Check, ChevronDown, ChevronRight, CloudSun, Coffee,
   Flame, Heart, History, Leaf, LoaderCircle, MapPin, Menu, Minus, Plus,
@@ -191,7 +191,7 @@ function NutritionGrid({ value, compact = false }) {
   </div>;
 }
 
-function PlanCard({ plan, index, onAdd, onSave, busy }) {
+function PlanCard({ plan, index, onAdd, onSave, busy, challengeBudget }) {
   const parts = plan.foods.flatMap(f => f.parts?.length ? f.parts : [f.name]);
   return <article className={`plan-card ${index === 0 ? 'recommended' : ''}`}>
     <div className="plan-label"><span>{index === 0 ? <><Sparkles size={13} /> 已核价首选</> : index === 1 ? '换个口味' : '另一种搭配'}</span><span className="plan-number">0{index + 1}</span></div>
@@ -201,6 +201,7 @@ function PlanCard({ plan, index, onAdd, onSave, busy }) {
     <NutritionGrid value={plan.nutrition} compact />
     <div className="plan-reason"><CheckCircle2 size={14} /><span>{plan.reasons[0]}</span></div>
     {plan.savings?.officialSavings > 0 && <p className="plan-savings">较官方原价优惠 ¥{money(plan.savings.officialSavings / 100)}</p>}
+    {challengeBudget !== null && <p className="challenge-card-balance">¥{challengeBudget} 挑战 · 还剩 ¥{money((Math.round(challengeBudget * 100) - Math.round(plan.price * 100)) / 100)}</p>}
     <div className="plan-bottom"><div><small>官方核价 · 不含餐具</small><strong><span>¥</span>{money(plan.price)}</strong></div>
       <button onClick={() => onAdd(plan.foods)} className={index === 0 ? 'button primary small' : 'button outline small'}><Plus size={15} /> 选这餐</button></div>
     <button className="text-button save-meal" disabled={busy} onClick={() => onSave(plan.foods)}><Heart size={14} />存为常点</button>
@@ -237,6 +238,7 @@ function Cart({ cart, preferences, selection, onQuantity, onRemove, onQuote, bus
     </div>
     <label className="checkbox-line"><input type="checkbox" checked={tableware} onChange={e => setTableware(e.target.checked)} /><span>需要餐具</span><Leaf size={13} /></label>
     <div className="cart-total"><span>菜单预估</span><strong><small>¥</small>{cart.length ? money(total) : '0'}</strong></div>
+    {preferences.challengeBudget !== null && preferences.challengeBudget !== undefined && <p className="challenge-card-balance">当前挑战上限 ¥{preferences.challengeBudget} · 含结算费用</p>}
     {!!cart.length && <button className="text-button save-meal" disabled={busy} onClick={() => onSave(cart)}><Heart size={14} />把这一餐存为常点</button>}
     {total > preferences.budget && <p className="cart-warning">菜单估价超过 ¥{preferences.budget} 预算。</p>}
     <button className="button primary checkout" disabled={!cart.length || !selection || busy} onClick={() => onQuote(tableware)}>
@@ -307,6 +309,7 @@ function Checkout({ quote, selection, cart, busy, onSubmit, onClose }) {
     <div className="checkout-fees">{[['商品金额', price.productPrice], ['配送费', price.deliveryPrice], ['打包费', price.packingPrice], ['餐具费', price.tablewarePrice]].map(([name, amount]) => amount !== undefined && <div key={name}><span>{name}</span><span>¥{money(amount / 100)}</span></div>)}</div>
     <div className="checkout-final"><span>实际应付</span><strong>¥{money(price.price / 100)}</strong></div>
     <PriceSavings savings={quote.savings} comparison={quote.comparison} />
+    {quote.challengeBudget !== null && quote.challengeBudget !== undefined && <p className="challenge-card-balance">本次核价符合 ¥{quote.challengeBudget} 挑战预算及营养条件，尚未支付。</p>}
     {price.price / 100 > selection.budget && <div className="inline-error"><AlertCircle size={15} />实时总价已超出你设定的 ¥{selection.budget} 预算，请核对。</div>}
     {quote.unknownNutrition.length > 0 && <p className="inline-error">以下餐品营养未知：{quote.unknownNutrition.join('、')}，无法核对完整营养总量。</p>}
     {selection.mode === 'pickup' && <div className="field"><label>选择取餐方式</label><div className="takeways">{(price.takeWayList ?? []).map(t => <label key={t.code} className={takeWay === t.code ? 'selected' : ''}>
@@ -338,6 +341,9 @@ export default function App() {
   const [selection, setSelection] = useState(null);
   const [catalog, setCatalog] = useState([]);
   const [plans, setPlans] = useState([]);
+  const [challengeBudget, setChallengeBudget] = useState(null);
+  const [challengeResult, setChallengeResult] = useState(null);
+  const [challengeError, setChallengeError] = useState('');
   const [stats, setStats] = useState(null);
   const [planMessage, setPlanMessage] = useState('');
   const [priceScope, setPriceScope] = useState('');
@@ -368,6 +374,7 @@ export default function App() {
     mealsRequest.current++; offersRequest.current++;
     setSelection(null); setCart([]); setQuote(null); setOrder(null); setCatalog([]); setPlans([]); setHistory([]);
     setOffers(null); setJournal(null); setFavorites([]);
+    setChallengeBudget(null); setChallengeResult(null); setChallengeError('');
     setStats(null); setPlanMessage(''); setPriceScope(''); setCategory('all'); setSearch('');
     setPicker(false); setSettings(false); setPage('home'); setToken(''); setBusy({});
   }
@@ -471,23 +478,29 @@ export default function App() {
     finally { flag('sync', false); }
   }
 
-  async function loadMeals(nextSelection = selection) {
+  function changeChallenge(value) {
+    setChallengeBudget(value); setChallengeResult(null); setChallengeError(''); setQuote(null);
+    loadMeals(selection, value);
+  }
+  async function loadMeals(nextSelection = selection, budget = challengeBudget) {
     if (!nextSelection) { setPicker(true); return; }
     const request = ++mealsRequest.current;
+    setChallengeResult(null); setChallengeError('');
     flag('meals', true); setPlans([]); setCatalog([]); setPlanMessage(''); setPriceScope(''); setStats(null); setCategory('all'); setSearch('');
     try {
       const ctx = getContext(nextSelection);
       const [menu, recommendation] = await Promise.all([
         api(`/menu?${params(ctx)}`),
-        api('/recommend', post({ context: ctx })),
+        api('/recommend', post({ context: ctx, ...(budget !== null ? { challengeBudget: budget } : {}) })),
       ]);
       if (request !== mealsRequest.current) return;
       setCatalog(menu.foods); setPlans(recommendation.plans); setStats(recommendation.stats);
+      setChallengeResult(recommendation.challenge);
       setPlanMessage(recommendation.message); setContext(recommendation.context);
       setPriceScope(recommendation.scope);
       if (recommendation.couponError) setPlanMessage('账户优惠券暂不可查询，本次只比较门店菜单。');
       if (menu.skipped) setToast({ type: 'info', text: `${menu.skipped} 款餐品详情暂不可用，已从菜单中移除。` });
-    } catch (e) { if (request === mealsRequest.current) { showError(e); if (!e.stale) setPlanMessage(e.message); } }
+    } catch (e) { if (request === mealsRequest.current) { showError(e); if (!e.stale) { setPlanMessage(e.message); setChallengeError(e.message); } } }
     finally { if (request === mealsRequest.current) flag('meals', false); }
   }
   function chooseStore(value) {
@@ -523,6 +536,7 @@ export default function App() {
     try {
       const data = await api('/quote', post({
         context: getContext(selection), selections: cart.map(f => ({ id: f.id, quantity: f.quantity })), needTableware,
+        ...(challengeBudget !== null ? { challengeBudget } : {}),
       }));
       setQuote(data);
     } catch (e) { showError(e); } finally { flag('quote', false); }
@@ -573,6 +587,7 @@ export default function App() {
   const weather = context?.weather;
   const currentGoal = context?.goal ?? preferences.goal;
   const visibleFoods = catalog.filter(f => (category === 'all' || f.role === category) && f.name.includes(search));
+  const mealPreferences = { ...preferences, budget: challengeBudget ?? preferences.budget, challengeBudget };
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}>
       <a className="brand" href="#" onClick={e => { e.preventDefault(); setPage('home'); }}><span className="brand-mark"><Utensils size={25} /></span><span><strong>麦搭</strong><small>MAI PICK</small></span></a>
@@ -608,6 +623,9 @@ export default function App() {
               <button onClick={() => setPage('offers')}><Ticket size={20} /><span><strong>{offers ? `${offers.claimable.filter(c => c.canClaim).length} 张券当前可领` : '看看今天的优惠'}</strong><small>{offers?.coupons.filter(c => c.expiresToday).length ?? 0} 张本人券今日到期 · 领完再核价</small></span><ChevronRight size={17} /></button>
               <button onClick={() => setPage('journal')}><Wallet size={20} /><span><strong>{journal ? `本月已确认支出 ¥${money(journal.spent / 100)}` : '常点搭配与月预算'}</strong><small>{favorites.length} 个常点搭配 · {journal ? `预算余额 ¥${money(journal.remaining / 100)}` : '记住喜欢，也记清花费'}</small></span><ChevronRight size={17} /></button>
             </section>
+            <BudgetChallenge budget={challengeBudget} result={challengeResult} error={challengeError}
+              busy={busy.meals || busy.preferences || busy.claim || busy.quote || busy.order} hasStore={Boolean(selection)} preferences={preferences}
+              onChange={changeChallenge} onOffers={() => setPage('offers')} onPreferences={() => setPage('preferences')} />
             <section className="goal-section"><div className="section-row"><h2>这一餐，你更在意…</h2><button className="text-button" onClick={() => setPage('preferences')}>调整偏好 <SlidersHorizontal size={14} /></button></div>
               <div className="goal-grid">{goals.map(({ id, name, icon: Icon, description }) => <button key={id} className={`goal-option ${preferences.goal === id ? 'selected' : ''}`} disabled={busy.preferences || busy.meals} onClick={() => savePreferences({ ...preferences, goal: id }, false)}>
                 <span className={`goal-icon ${id}`}><Icon size={19} /></span><strong>{name}</strong><small>{description}</small>{preferences.goal === id && <CheckCircle2 size={13} className="goal-check" />}</button>)}</div>
@@ -615,7 +633,7 @@ export default function App() {
             <section className="recommendation-section"><div className="section-row"><div className="title-with-icon"><Sparkles size={20} /><h2>为今天搭配的美味</h2></div><span className="subtle-pill">{context?.weekdayLabel ?? '今天'} · {goalName(currentGoal)}</span></div>
               <p className="section-description">先满足营养和忌口，再按实付价从低到高。同价时考虑口味、天气和星期。</p>
               {busy.meals ? <div className="recommendation-loading"><Loading text="正在核对份量、营养和门店价格…" /><p>首次加载需要查询餐品详情，下次搭配会更快。</p></div>
-                : plans.length ? <div className="plans-grid">{plans.map((plan, i) => <PlanCard key={plan.id} plan={plan} index={i} onAdd={foods => addFoods(foods, true)} onSave={saveFavorite} busy={busy.favorite} />)}</div>
+                : plans.length ? <div className="plans-grid">{plans.map((plan, i) => <PlanCard key={plan.id} plan={plan} index={i} onAdd={foods => addFoods(foods, true)} onSave={saveFavorite} busy={busy.favorite} challengeBudget={challengeBudget} />)}</div>
                   : <div className="empty-state recommendation-empty"><span className="empty-illustration"><Utensils size={30} /><Sparkles size={15} /></span><div><h3>{selection ? '给今天找一顿合适的美味' : '先选餐厅，再搭配美味'}</h3><p>{planMessage || '用餐厅的实时菜单，为你寻找符合条件的组合。'}</p></div><button className="button outline small" disabled={busy.meals || booting} onClick={() => loadMeals()}>{selection ? '重新搭配' : '选择餐厅'}<ArrowRight size={14} /></button></div>}
               {stats && <p className="source-note"><ShieldCheck size={13} />已核价 {stats.verified} / {stats.checked} 个候选 · 可用优惠券 {stats.couponOffers} 款<span>{stats.combinations} 个营养达标组合</span></p>}
               {stats && <p className="price-scope">{priceScope}{stats.priceFailed > 0 ? ` ${stats.priceFailed} 个候选无法核价，已移除。` : ''}{stats.truncated || stats.defaultOnly ? ' 部分复杂套餐仅比较默认组成，搜索未覆盖全部替换。' : ''}</p>}
@@ -623,7 +641,7 @@ export default function App() {
             </section>
             <section className="today-note"><span className="today-note-icon"><Coffee size={21} /></span><div><strong>今天的小提醒</strong><p>{context?.cold ? '天气偏凉，有合适热饮时会优先推荐。' : context?.hot ? '天气偏热，合适的清爽饮品会排在前面。' : context?.rain ? '今天有降水，麦乐送或许更方便。' : '吃饭不必复杂。喜欢的口味，也可以有明白的营养。'}{context?.rain && context?.cold ? ' 有降水，也可以考虑麦乐送。' : ''}</p></div><Leaf size={32} strokeWidth={1.2} /></section>
           </div>
-            <Cart cart={cart} preferences={preferences} selection={selection} onQuantity={(id, delta) => { setCart(c => c.map(f => f.id === id ? { ...f, quantity: f.quantity + delta } : f)); setQuote(null); }} onRemove={id => { setCart(c => c.filter(f => f.id !== id)); setQuote(null); }} onClear={() => { setCart([]); setQuote(null); }} onQuote={getQuote} busy={busy.quote || busy.favorite || busy.claim} onSave={saveFavorite} />
+            <Cart cart={cart} preferences={mealPreferences} selection={selection} onQuantity={(id, delta) => { setCart(c => c.map(f => f.id === id ? { ...f, quantity: f.quantity + delta } : f)); setQuote(null); }} onRemove={id => { setCart(c => c.filter(f => f.id !== id)); setQuote(null); }} onClear={() => { setCart([]); setQuote(null); }} onQuote={getQuote} busy={busy.quote || busy.favorite || busy.claim} onSave={saveFavorite} />
           </div>
           <footer className="page-footer"><span>MAI PICK <span>·</span> 给选择做减法，给生活加点味。</span><span>营养：麦当劳 MCP{weather ? ' · 天气：Open-Meteo' : ''}</span></footer>
         </>}
@@ -637,7 +655,7 @@ export default function App() {
               <p className={food.nutrition ? '' : 'nutrition-unknown'}>{food.nutrition ? `${food.nutrition.kcal} kcal · 蛋白质 ${food.nutrition.protein} g` : '暂无匹配营养，加入后总营养不可计算'}</p>
               <div className="menu-food-bottom"><strong>¥{food.price !== null ? money(food.price) : '待结算'}</strong><button className="add-round" disabled={food.price === null} onClick={() => addFoods([food])} aria-label={`加入${food.name}`}><Plus size={18} /></button></div></article>)}</div>}
             {!busy.meals && !visibleFoods.length && <div className="empty-state"><Utensils size={32} /><h3>{selection ? '没有匹配的餐品' : '先选择一家餐厅'}</h3><p>{selection ? '试试其他名称，或换一家门店。' : '菜单和价格会因餐厅而不同。'}</p>{!selection && <button className="button primary small" onClick={() => setPicker(true)}>选择餐厅</button>}</div>}
-          </div><Cart cart={cart} preferences={preferences} selection={selection} onQuantity={(id, d) => { setCart(c => c.map(f => f.id === id ? { ...f, quantity: f.quantity + d } : f)); setQuote(null); }} onRemove={id => { setCart(c => c.filter(f => f.id !== id)); setQuote(null); }} onClear={() => { setCart([]); setQuote(null); }} onQuote={getQuote} busy={busy.quote || busy.favorite || busy.claim} onSave={saveFavorite} /></div>
+          </div><Cart cart={cart} preferences={mealPreferences} selection={selection} onQuantity={(id, d) => { setCart(c => c.map(f => f.id === id ? { ...f, quantity: f.quantity + d } : f)); setQuote(null); }} onRemove={id => { setCart(c => c.filter(f => f.id !== id)); setQuote(null); }} onClear={() => { setCart([]); setQuote(null); }} onQuote={getQuote} busy={busy.quote || busy.favorite || busy.claim} onSave={saveFavorite} /></div>
         </>}
         {page === 'offers' && <OffersPage offers={offers} busy={busy.offers || busy.claim || busy.meals || busy.order} hasStore={Boolean(selection)}
           onRefresh={() => refreshOffers(true)} onClaim={claimCoupons} onReset={resetClaim}
@@ -656,7 +674,7 @@ export default function App() {
       <ConnectionGuide connection={connection} nutritionCount={nutritionCount} token={token} onToken={setToken}
         onConnect={saveToken} busy={busy.connection || busy.order} error={connectionError} onDisconnect={disconnectAccount} />
     </Modal>}
-    {quote && <Checkout quote={quote} selection={{ ...selection, budget: preferences.budget }} cart={cart} busy={busy.order} onSubmit={submitOrder} onClose={() => setQuote(null)} />}
+    {quote && <Checkout quote={quote} selection={{ ...selection, budget: quote.challengeBudget ?? preferences.budget }} cart={cart} busy={busy.order} onSubmit={submitOrder} onClose={() => setQuote(null)} />}
     {order && <PaymentResult order={order} onClose={() => setOrder(null)} />}
   </div>;
 }

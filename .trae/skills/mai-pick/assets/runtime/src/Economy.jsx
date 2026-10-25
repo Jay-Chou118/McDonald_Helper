@@ -2,6 +2,40 @@ import { useState } from 'react';
 import { Ticket, CalendarDays, Heart, Wallet, RefreshCw, ArrowRight, Trash2, LoaderCircle } from 'lucide-react';
 
 const money = cents => (cents / 100).toFixed(2).replace(/\.00$/, '');
+export function BudgetChallenge({ budget, result, busy, error, hasStore, preferences, onChange, onOffers, onPreferences }) {
+  const [custom, setCustom] = useState('18');
+  const active = budget !== null;
+  return <section className="budget-challenge" aria-label="预算挑战">
+    <div className="section-row"><div><span className="eyebrow">SMALL BUDGET, GOOD MEAL</span><h2>这点预算，能吃到什么？</h2></div>
+      {active && <button className="text-button" disabled={busy} onClick={() => onChange(null)}>退出挑战</button>}</div>
+    <p className="challenge-description">选一个金额，找营养达标的一餐。日常预算 ¥{preferences.budget} 单独保留。</p>
+    <div className="challenge-controls">
+      <div className="challenge-presets" role="group" aria-label="挑战预算">{[15, 20, 25].map(value =>
+        <button key={value} className={budget === value ? 'selected' : ''} aria-pressed={budget === value} disabled={busy}
+          onClick={() => onChange(value)}>¥{value}<small>{value === 15 ? '精打细算' : value === 20 ? '刚刚好' : '多点选择'}</small></button>)}</div>
+      <form className="challenge-custom" onSubmit={e => { e.preventDefault(); onChange(Number(custom)); }}>
+        <label htmlFor="challenge-budget">自定金额（元）</label><div><input id="challenge-budget" type="number" min="1" max="500" step="0.01" required
+          value={custom} onChange={e => setCustom(e.target.value)} disabled={busy} />
+          <button className="button outline small" disabled={busy}>挑战</button></div>
+      </form>
+    </div>
+    <div className="challenge-status" role="status" aria-live="polite">
+      {busy && active ? <p><LoaderCircle size={16} className="spin" />正在寻找 ¥{budget} 内的达标组合…</p>
+        : !active ? <p>选择预算开始挑战，推荐结果显示在下方。</p>
+          : !hasStore ? <p>已选择 ¥{budget} 挑战，请先选择餐厅。</p>
+            : error ? <p>本次查询未完成：{error}</p>
+              : result?.status === 'matched' ? <><strong>找到预算内的一餐</strong><p>已核价最低 ¥{money(result.lowestVerified)} · 预算还剩 ¥{money(result.budget - result.lowestVerified)}。查看下方搭配。</p></>
+                : result?.status === 'over_budget' ? <><strong>这次预算内暂未找到</strong><p>已核价达标候选最低 ¥{money(result.lowestVerified)}，超出 ¥{money(result.gap)}。可以查看可领券，或手动换个预算。</p></>
+                  : result?.status === 'no_match' ? <><strong>暂时没有符合营养和忌口的组合</strong><p>提高预算不一定能解决；可以换餐厅或检查偏好，条件不会自动放宽。</p></>
+                    : result?.status === 'unverified' ? <p>候选暂未成功核价，尚无法判断是否达标，请重试或换餐厅。</p>
+                      : <p>选择预算后重新查询当前门店。</p>}
+    </div>
+    {active && <div className="challenge-links"><button className="text-button" onClick={onOffers}>看看可领券 <ArrowRight size={13} /></button>
+      <button className="text-button" onClick={onPreferences}>查看营养与忌口</button></div>}
+    <p className="fine-print">沿用热量 {preferences.calorieMin}–{preferences.calorieMax} kcal、蛋白质 ≥{preferences.proteinMin} g、钠 ≤{preferences.sodiumMax} mg 和全部忌口。推荐含接口返回的配送及打包费，不含餐具；结算再次核验。预算余额不代表优惠金额，最低价仅指已核价候选。</p>
+  </section>;
+}
+
 export function PriceSavings({ savings, comparison }) {
   if (!savings) return null;
   return <div className="savings-box">

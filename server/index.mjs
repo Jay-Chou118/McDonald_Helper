@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { safeError, ServiceError } from './mcp.mjs';
 import { mealContext } from './data.mjs';
 import { createSessionManager } from './sessions.mjs';
-import { contextFor, recommend, addNutrition } from './planner.mjs';
+import { contextFor, recommend, addNutrition, isExcluded } from './planner.mjs';
 import { verifyValue } from './value.mjs';
 import { getOffers, claimOffers } from './offers.mjs';
 import { priceSummary, compareSingles, foodSignature, journalSummary, yuanToCents } from './savings.mjs';
@@ -264,28 +264,40 @@ app.post('/api/history/sync', async (req, res) => {
   }));
   res.json({ updated, errors: [...new Set(errors)] });
 });
+const challengeBudgetSchema = z.number().min(1).max(500).multipleOf(0.01).optional();
 app.post('/api/recommend', async (req, res) => {
-  const input = z.object({ context: contextSchema }).strict().parse(req.body);
-  const preferences = await req.scope.data.getPreferences();
+  const input = z.object({ context: contextSchema, challengeBudget: challengeBudgetSchema }).strict().parse(req.body);
+  const savedPreferences = await req.scope.data.getPreferences();
+  const preferences = { ...savedPreferences, budget: input.challengeBudget ?? savedPreferences.budget };
   const catalog = await req.scope.data.getCatalog(input.context);
   const weather = preferences.weatherEnabled ? await req.scope.data.getWeather(preferences.city) : null;
   const context = contextFor(preferences, weather);
   const result = await req.scope.data.cached(`value:${JSON.stringify([input.context, preferences, context])}`, 45000, async () => {
     const candidates = recommend(catalog.foods, preferences, context, { limit: Infinity, checkEstimatedBudget: false });
-    const priced = await verifyValue(candidates.plans, preferences, items => req.scope.callMcd('calculate-price', {
-      ...mealContext(input.context), items, needTableware: false,
-    }));
+    const priced = await verifyValue(candidates.plans, preferences, items => {
+      const args = { ...mealContext(input.context), items, needTableware: false };
+      return req.scope.data.cached(`candidate-price:${JSON.stringify(args)}`, 45000,
+        () => req.scope.callMcd('calculate-price', args));
+    });
     return { ...priced, stats: { ...candidates.stats, ...priced.stats, couponOffers: catalog.couponOffers,
       truncated: catalog.truncated, defaultOnly: catalog.defaultOnly },
       couponError: catalog.couponError, scope: '按菜单估价选取最多 24 个不同低价候选，按官方实付金额排序；价格含接口返回的费用，不含餐具。结算时再次核价。' };
   });
-  res.json({ ...result, context, updatedAt: catalog.updatedAt, skipped: catalog.skipped });
+  const challenge = input.challengeBudget === undefined ? null : {
+    budget: Math.round(input.challengeBudget * 100),
+    status: result.plans.length ? 'matched' : result.stats.lowestVerified !== null ? 'over_budget'
+      : result.stats.combinations ? 'unverified' : 'no_match',
+    lowestVerified: result.stats.lowestVerified,
+    gap: result.stats.lowestVerified === null ? null : Math.max(0, result.stats.lowestVerified - Math.round(input.challengeBudget * 100)),
+  };
+  res.json({ ...result, challenge, context, updatedAt: catalog.updatedAt, skipped: catalog.skipped });
 });
 
 const quoteSchema = z.object({
   context: contextSchema,
   selections: selectionsSchema,
   needTableware: z.boolean(),
+  challengeBudget: challengeBudgetSchema,
 }).strict();
 
 app.post('/api/quote', async (req, res) => {
@@ -299,7 +311,18 @@ app.post('/api/quote', async (req, res) => {
   const price = await req.scope.callMcd('calculate-price', args);
   if (!Number.isInteger(price.price) || price.price < 0) throw new ServiceError('麦当劳未返回有效金额，无法继续下单。');
   const preferences = await req.scope.data.getPreferences();
-  const savings = priceSummary(price, preferences.budget);
+  if (input.challengeBudget !== undefined) {
+    const nutrition = addNutrition(selected);
+    if (!nutrition || nutrition.kcal < preferences.calorieMin || nutrition.kcal > preferences.calorieMax
+      || nutrition.protein < preferences.proteinMin || nutrition.sodium > preferences.sodiumMax
+      || selected.some(food => isExcluded(food, preferences))) {
+      throw new ServiceError('购物袋已不符合当前挑战的营养或忌口条件，请重新搭配，或退出挑战后自由选餐。', 422);
+    }
+    if (price.price > Math.round(input.challengeBudget * 100)) {
+      throw new ServiceError(`含费用的实际应付 ¥${(price.price / 100).toFixed(2)} 超出 ¥${input.challengeBudget} 挑战预算，请调整搭配或退出挑战。`, 422);
+    }
+  }
+  const savings = priceSummary(price, input.challengeBudget ?? preferences.budget);
   const comparison = await compareSingles(selected, catalog.foods, items => req.scope.callMcd('calculate-price', {
     ...args, items,
   }), price.price);
@@ -307,6 +330,7 @@ app.post('/api/quote', async (req, res) => {
   const id = randomUUID();
   const quote = {
     id, args, context: input.context, price, selected, savings, comparison, offersRevision,
+    challengeBudget: input.challengeBudget ?? null,
     nutrition: addNutrition(selected), identity: req.scope.identity, revision: req.scope.key, status: 'prepared',
     createdAt: Date.now(), expiresAt: Date.now() + 180000,
   };
@@ -316,7 +340,7 @@ app.post('/api/quote', async (req, res) => {
     if (Object.keys(retained).length >= 200) throw new ServiceError('本会话记录已达上限，请断开连接后重新开始。', 409);
     return { ...retained, [id]: quote };
   });
-  res.json({ id, price, savings, comparison, nutrition: quote.nutrition, expiresAt: quote.expiresAt,
+  res.json({ id, price, savings, comparison, challengeBudget: quote.challengeBudget, nutrition: quote.nutrition, expiresAt: quote.expiresAt,
     unknownNutrition: selected.filter(f => !f.nutrition).map(f => f.name) });
 });
 

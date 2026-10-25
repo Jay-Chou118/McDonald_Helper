@@ -20,7 +20,7 @@ export async function verifyValue(candidates, preferences, calculate, maxChecks 
     if (!offers.has(offer)) { offers.add(offer); add(plan); }
   }
   candidates.forEach(add);
-  let cursor = 0, verified = 0, failed = 0;
+  let cursor = 0, verified = 0, failed = 0, lowestVerified = null;
   const priced = [];
   await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
     while (cursor < queue.length) {
@@ -29,8 +29,9 @@ export async function verifyValue(candidates, preferences, calculate, maxChecks 
         const result = await calculate(plan.foods.map(f => f.item));
         if (!Number.isInteger(result.price) || result.price < 0) throw new Error('无效金额');
         verified++;
+        lowestVerified = lowestVerified === null ? result.price : Math.min(lowestVerified, result.price);
         const price = result.price / 100;
-        if (price > preferences.budget) continue;
+        if (result.price > Math.round(preferences.budget * 100)) continue;
         const foods = plan.foods.map((food, i) => {
           const line = result.productList?.[i];
           const actual = line?.productCode === food.code && Number.isInteger(line.subtotal) ? line.subtotal / 100 : food.price;
@@ -53,7 +54,7 @@ export async function verifyValue(candidates, preferences, calculate, maxChecks 
     plans.push(plan);
     if (plans.length === 3) break;
   }
-  return { plans, stats: { checked: queue.length, verified, priceFailed: failed, affordable: priced.length },
+  return { plans, stats: { checked: queue.length, verified, priceFailed: failed, affordable: priced.length, lowestVerified },
     message: plans.length ? null : candidates.length
       ? '已核价的方案没有可售且符合实付预算的组合，请调整条件或换一家门店。'
       : '当前门店没有同时满足营养和口味限制的组合，请调整条件后重试。' };
