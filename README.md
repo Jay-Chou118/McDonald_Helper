@@ -12,7 +12,7 @@ npm run build
 npm start
 ```
 
-打开 **http://localhost:3001**。
+打开 [本地网页版（localhost:3001）](http://localhost:3001)。
 
 开发模式：
 
@@ -20,7 +20,7 @@ npm start
 npm run dev
 ```
 
-打开 http://localhost:5173。Vite 将 API 请求转发到本机 3001 端口。
+打开 [开发页面（localhost:5173）](http://localhost:5173)。Vite 将 API 请求转发到本机 3001 端口。
 
 ## 使用
 
@@ -63,7 +63,7 @@ npm run dev
 
 ## 数据与边界
 
-- **已接入真实官方 MCP**：`https://mcp.mcd.cn`，Streamable HTTP，服务端 Bearer 认证。仓库文档：https://github.com/M-China/mcd-mcp-server。
+- **已接入真实官方 MCP**：`https://mcp.mcd.cn`，Streamable HTTP，服务端 Bearer 认证。参见 [麦当劳官方 MCP 仓库文档](https://github.com/M-China/mcd-mcp-server)。
 - **天气**：Open-Meteo 城市级实时数据，十分钟缓存；获取失败时显示天气不可用并关闭天气排序，不使用模拟天气。
 - **价格与优惠券**：菜单价仅用于选择核价候选，推荐按官方实付价排序并筛选预算。自动查询本账户在当前门店可用的优惠券及优惠餐；券可用性以官方核价为准。优惠券查询失败会提示本次未覆盖；候选核价失败会移除并显示数量。默认查询不领券，用户点击领券后调用官方接口；不兑换积分或付费开卡。菜单缓存三分钟，推荐报价缓存 45 秒，结算时重新核价。
 - **营养缺失**：营养未知餐品可手动加入购物袋，但完整营养总量显示未知，不参与自动推荐。组合必须有官方整餐营养或所有组成部分的营养才可参与推荐。
